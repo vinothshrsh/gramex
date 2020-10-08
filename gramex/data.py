@@ -1234,3 +1234,42 @@ def filtercols(url, args={}, meta={}, engine=None, table=None, ext=None,
         col_args['_limit'] = [limit]
         result[col] = gramex.data.filter(url, table=table, args=col_args, **kwargs)
     return result
+
+
+# This maps all SQLAlchemy types into their lowercase names
+#   _sa_type['text'] -> sa.Text
+#   _sa_type['bigint'] -> sa.BIGINT
+# _sa_type = {
+#     key.lower(): val
+#     # Loop through all SQL Types
+#     for key, val in vars(sa.types).items()
+#     # Use all public classes
+#     if key.startswith('_') and inspect.isclass(val)
+# }
+
+def alter(url, table, schema):
+    '''
+    autoincrement
+    nullable
+    default
+    primary_key
+    index
+    unique
+    '''
+    engine = sa.create_engine(url)
+    meta = sa.MetaData(bind=engine)
+    meta.reflect()
+    if table not in meta.tables:
+        # If the table's not in the DB, create it
+        cols = [sa.Column(row['name'], _sa_type[row.get('type', 'text')])]
+        sa.Table(table, meta, cols).create(engine)
+    else:
+        # If the table's already in the DB, add new columns. We can't change column types
+        with engine.connect() as conn:
+            with conn.begin():
+                for row in schema:
+                    if row['name'] not in table.columns:
+                        row.update(table=table)
+                        row.setdefault('type', 'text')
+                        # This syntax works on DB2, MySQL, Oracle, PostgreSQL, SQLite
+                        conn.execute('ALTER TABLE %(table)s ADD COLUMN %(name)s %(type)s' % row)
