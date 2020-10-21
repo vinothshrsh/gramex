@@ -7,11 +7,10 @@ import re
 import six
 import time
 import json
-import sqlalchemy
+import sqlalchemy as sa
 import pandas as pd
 import gramex.cache
 from tornado.escape import json_encode
-from sqlalchemy.sql import text
 from gramex.config import merge, app_log
 from orderedattrdict import AttrDict
 
@@ -233,7 +232,7 @@ def filter(url, args={}, meta={}, engine=None, ext=None,
             elif table is not None:
                 raise ValueError('table: must be string or list of strings, not %r' % table)
             all_params = {k: v[0] for k, v in args.items() if len(v) > 0}
-            data = gramex.cache.query(text(query), engine, state, params=all_params)
+            data = gramex.cache.query(sa.text(query), engine, state, params=all_params)
             data = transform(data) if callable(transform) else data
             return _filter_frame(data, meta=meta, controls=controls, args=args)
         elif table:
@@ -382,7 +381,7 @@ def insert(url, meta={}, args=None, engine=None, table=None, ext=None, id=None,
         engine = create_engine(url, **kwargs)
         try:
             cols = get_table(engine, table).columns
-        except sqlalchemy.exc.NoSuchTableError:
+        except sa.exc.NoSuchTableError:
             pass
         else:
             rows = _pop_columns(rows, [col.name for col in cols], meta['ignored'])
@@ -414,13 +413,13 @@ def get_engine(url):
     if isinstance(url, pd.DataFrame):
         return 'dataframe'
     try:
-        url = sqlalchemy.engine.url.make_url(url)
-    except sqlalchemy.exc.ArgumentError:
+        url = sa.engine.url.make_url(url)
+    except sa.exc.ArgumentError:
         return 'dir' if os.path.isdir(url) else 'file'
     try:
         url.get_driver_name()
         return 'sqlalchemy'
-    except sqlalchemy.exc.NoSuchModuleError:
+    except sa.exc.NoSuchModuleError:
         return url.drivername
 
 
@@ -434,20 +433,20 @@ def create_engine(url, **kwargs):
     re-use the engine objects within this module.
     '''
     if url not in _ENGINE_CACHE:
-        _ENGINE_CACHE[url] = sqlalchemy.create_engine(url, **kwargs)
+        _ENGINE_CACHE[url] = sa.create_engine(url, **kwargs)
     return _ENGINE_CACHE[url]
 
 
 def get_table(engine, table):
     '''Return the sqlalchemy table from the engine and table name'''
     if engine not in _METADATA_CACHE:
-        _METADATA_CACHE[engine] = sqlalchemy.MetaData()
+        _METADATA_CACHE[engine] = sa.MetaData()
     metadata = _METADATA_CACHE[engine]
     if '.' in table:
         schema, tbl = table.rsplit('.', 1)
-        return sqlalchemy.Table(tbl, metadata, autoload=True, autoload_with=engine, schema=schema)
+        return sa.Table(tbl, metadata, autoload=True, autoload_with=engine, schema=schema)
     else:
-        return sqlalchemy.Table(table, metadata, autoload=True, autoload_with=engine)
+        return sa.Table(table, metadata, autoload=True, autoload_with=engine)
 
 
 def _pop_controls(args):
@@ -788,11 +787,11 @@ def _filter_db(engine, table, meta, controls, args, source='select', id=[]):
     colslist = cols.keys()
 
     if source == 'delete':
-        query = sqlalchemy.delete(table)
+        query = sa.delete(table)
     elif source == 'update':
-        query = sqlalchemy.update(table)
+        query = sa.update(table)
     else:
-        query = sqlalchemy.select([table])
+        query = sa.select([table])
     cols_for_update = {}
     cols_having = []
     for key, vals in args.items():
@@ -847,7 +846,7 @@ def _filter_db(engine, table, meta, controls, args, source='select', id=[]):
                     # Convert aggregation into SQLAlchemy query
                     agg = agg.lower()
                     typ[key] = _agg_type.get(agg, cols[col].type.python_type)
-                    agg_func = getattr(sqlalchemy.sql.expression.func, agg)
+                    agg_func = getattr(sa.sql.expression.func, agg)
                     agg_cols[key] = agg_func(cols[col]).label(key)
             if not agg_cols:
                 return pd.DataFrame()
@@ -867,7 +866,7 @@ def _filter_db(engine, table, meta, controls, args, source='select', id=[]):
             meta['sort'], ignore_sorts = _filter_sort_columns(
                 controls['_sort'], colslist + query.columns.keys())
             for col, asc in meta['sort']:
-                orderby = sqlalchemy.asc if asc else sqlalchemy.desc
+                orderby = sa.asc if asc else sa.desc
                 query = query.order_by(orderby(col))
             if len(ignore_sorts) > 0:
                 meta['ignored'].append(('_sort', ignore_sorts))
@@ -1093,9 +1092,9 @@ def dirstat(url, timeout=10, **kwargs):
         - ``level``: path depth (i.e. the number of paths in dir)
     '''
     try:
-        url = sqlalchemy.engine.url.make_url(url)
+        url = sa.engine.url.make_url(url)
         target = url.database
-    except sqlalchemy.exc.ArgumentError:
+    except sa.exc.ArgumentError:
         target = url
     if not os.path.isdir(target):
         raise OSError('dirstat: %s is not a directory' % target)
@@ -1239,37 +1238,56 @@ def filtercols(url, args={}, meta={}, engine=None, table=None, ext=None,
 # This maps all SQLAlchemy types into their lowercase names
 #   _sa_type['text'] -> sa.Text
 #   _sa_type['bigint'] -> sa.BIGINT
-# _sa_type = {
-#     key.lower(): val
-#     # Loop through all SQL Types
-#     for key, val in vars(sa.types).items()
-#     # Use all public classes
-#     if key.startswith('_') and inspect.isclass(val)
-# }
+# Loop through all SQL Types, use all public variables
+_sa_type = {key.lower(): val for key, val in vars(sa.types).items() if not key.startswith('_')}
+
 
 def alter(url, table, schema):
     '''
-    autoincrement
-    nullable
-    default
-    primary_key
-    index
-    unique
+    schema: [
+        {'name': 'id', 'type': 'int', 'auto_increment': True, 'primary_key': True},
+        {'name': 'email'},
+        {'name': 'age', 'type': 'int', 'nullable': False},
+    ]
+    auto_increment: True
+    nullable: False
+    default: val
+    primary_key: True
     '''
     engine = sa.create_engine(url)
     meta = sa.MetaData(bind=engine)
     meta.reflect()
-    if table not in meta.tables:
-        # If the table's not in the DB, create it
-        cols = [sa.Column(row['name'], _sa_type[row.get('type', 'text')])]
-        sa.Table(table, meta, cols).create(engine)
-    else:
-        # If the table's already in the DB, add new columns. We can't change column types
-        with engine.connect() as conn:
-            with conn.begin():
-                for row in schema:
-                    if row['name'] not in table.columns:
-                        row.update(table=table)
-                        row.setdefault('type', 'text')
-                        # This syntax works on DB2, MySQL, Oracle, PostgreSQL, SQLite
-                        conn.execute('ALTER TABLE %(table)s ADD COLUMN %(name)s %(type)s' % row)
+    db_table = meta.tables.get(table, None)
+    # If the table's not in the DB, create it
+    if db_table is None:
+        cols = []
+        for row in schema:
+            col_type = row.get('type', 'text')
+            if isinstance(col_type, str):
+                row['type'] = _sa_type[col_type]
+            row['type_'] = row.pop('type')
+            cols.append(sa.Column(**row))
+        sa.Table(table, meta, *cols).create(engine)
+        return
+    # If the table's already in the DB, add new columns. We can't change column types
+    with engine.connect() as conn:
+        with conn.begin():
+            for row in schema:
+                if row['name'] in db_table.columns:
+                    continue
+                col_type = row.get('type', 'text')
+                constraints = []
+                for keyword in ('auto_increment', 'nullable', 'primary_key'):
+                    if row.get(keyword, None):
+                        constraints.append(keyword)
+                for keyword in ('default',):
+                    if row.get(keyword, None):
+                        constraints += [keyword, row[keyword]]
+                # This syntax works on DB2, MySQL, Oracle, PostgreSQL, SQLite
+                conn.execute('ALTER TABLE %s ADD COLUMN %s %s %s' % (
+                    table, row['name'], col_type, ' '.join(constraints)))
+    # TODO: insert() and update() should auto-run alter()
+
+    # BUG: update() doesn't handle this right
+    # ?id=1&data=x&id=2&data=y
+    # {id: [1, 2], data: [x, y]}

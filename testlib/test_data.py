@@ -770,3 +770,7 @@ class TestFilterColsDB(unittest.TestCase, FilterColsMixin):
     @classmethod
     def tearDownClass(cls):
         dbutils.sqlite_drop_db('test_filtercols.db')
+
+
+class TestAlter(unittest.TestCase):
+    pass
