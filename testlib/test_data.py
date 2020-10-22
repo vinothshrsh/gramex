@@ -773,4 +773,46 @@ class TestFilterColsDB(unittest.TestCase, FilterColsMixin):
 
 
 class TestAlter(unittest.TestCase):
-    pass
+    sales = gramex.cache.open(sales_file, 'xlsx')
+    db = set()
+
+    def check_alter(self, url):
+        # Add a new column of types str, int, float.
+        # Also test default, auto_increment, nullable and primary_key
+        gramex.data.alter(url, 'sales', [
+            {'name': 'email'},
+            {'name': 'id', 'type': 'int', 'auto_increment': True, 'primary_key': True},
+            {'name': 'age', 'type': 'float', 'nullable': False},
+        ])
+        engine = sa.create_engine(url)
+        meta = sa.MetaData(bind=engine)
+        meta.reflect()
+        sales = meta.tables['sales']
+        eq_(sales.columns.email.type.python_type, str)
+        # eq_(sales.columns.email.nullable, False)
+        eq_(sales.columns.id.type.python_type, int)
+        eq_(sales.columns.age.type.python_type, float)
+
+    def test_mysql(self):
+        url = dbutils.mysql_create_db(server.mysql, 'test_alter', sales=self.sales)
+        self.db.add('mysql')
+        self.check_alter(url)
+
+    def test_postgres(self):
+        url = dbutils.postgres_create_db(server.postgres, 'test_alter', sales=self.sales)
+        self.db.add('postgres')
+        self.check_alter(url)
+
+    def test_sqlite(self):
+        url = dbutils.sqlite_create_db('test_alter.db', sales=self.sales)
+        self.db.add('sqlite')
+        self.check_alter(url)
+
+    @classmethod
+    def tearDownClass(cls):
+        if 'mysql' in cls.db:
+            dbutils.mysql_drop_db(server.mysql, 'test_alter')
+        if 'postgres' in cls.db:
+            dbutils.postgres_drop_db(server.postgres, 'test_alter')
+        if 'sqlite' in cls.db:
+            dbutils.sqlite_drop_db('test_alter.db')
