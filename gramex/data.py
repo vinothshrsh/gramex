@@ -1292,18 +1292,20 @@ def schema(url, table, columns):
     # If the table's already in the DB, add new columns. We can't change column types
     with engine.connect() as conn:
         with conn.begin():
+            quote = engine.dialect.identifier_preparer.quote_identifier
             for row in columns:
                 if row['name'] in db_table.columns:
                     continue
-                col_type = row.get('type', 'text')
+                name, col_type = row['name'], row.get('type', 'text')
                 constraints = []
                 if 'nullable' in row:
                     constraints.append('' if row['nullable'] else 'NOT NULL')
                 if 'default' in row:
                     # repr() converts int, float properly,
                     #   str into 'str' with single quotes (which is the MySQL standard)
-                    #   datetime and other types will fail
+                    #   TODO: datetime and other types will fail
                     constraints += ['DEFAULT', repr(row['default'])]
                 # This syntax works on DB2, MySQL, Oracle, PostgreSQL, SQLite
-                conn.execute('ALTER TABLE %s ADD COLUMN %s %s %s' % (
-                    table, row['name'], col_type, ' '.join(constraints)))
+                conn.execute(
+                    f'ALTER TABLE {quote(table)} '
+                    f'ADD COLUMN {quote(name)} {col_type} {" ".join(constraints)}')
