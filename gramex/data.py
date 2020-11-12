@@ -1242,17 +1242,35 @@ def filtercols(url, args={}, meta={}, engine=None, table=None, ext=None,
 _sa_type = {key.lower(): val for key, val in vars(sa.types).items() if not key.startswith('_')}
 
 
-def alter(url, table, schema):
+def schema(url, table, columns):
     '''
-    schema: [
-        {'name': 'id', 'type': 'int', 'auto_increment': True, 'primary_key': True},
-        {'name': 'email'},
-        {'name': 'age', 'type': 'int', 'nullable': False},
-    ]
-    auto_increment: True
-    nullable: False
-    default: val
-    primary_key: True
+    Create or alter a table with schema specified in columns::
+
+        gramex.data.schema(url, table, columns=[
+            {'name': 'id', 'type': 'int', 'primary_key': True, 'autoincrement': True},
+            {'name': 'email', 'nullable': True, 'default': 'none'},
+            {'name': 'age', 'type': 'float', 'nullable': False, 'default': 18},
+        ])
+
+    It accepts the following parameters:
+
+    :arg str url: sqlalchemy URL
+    :arg str table: table name
+    :arg list(dict) columns: list of column specifications. Column specs are a dict with keys:
+        - ``name`` (str, required), e.g. ``"email"``
+        - ``type`` (str), e.g. ``"text"``
+        - ``default`` (str/int/float/bool), e.g. ``"none@example.org"``
+        - ``nullable`` (bool), e.g. ``False``
+        - ``primary_key`` (bool), e.g. ``True`` -- used only when creating new tables
+        - ``autoincrement`` (bool), e.g. ``True`` -- used only when creating new tables
+
+    If the table exists, any new columns are added. Existing columns are unchanged.
+
+    If the table does not exist, the table is created with the specified schema.
+
+    Note: ``primary_key`` and ``autoincrement`` don't work on existing tables because:
+        - SQLite disallows PRIMARY KEY with ALTER. https://stackoverflow.com/a/1120030/100904
+        - AUTO_INCREMENT doesn't work without PRIMARY KEY in MySQL
     '''
     engine = sa.create_engine(url)
     meta = sa.MetaData(bind=engine)
@@ -1261,33 +1279,31 @@ def alter(url, table, schema):
     # If the table's not in the DB, create it
     if db_table is None:
         cols = []
-        for row in schema:
+        for row in columns:
             col_type = row.get('type', 'text')
             if isinstance(col_type, str):
                 row['type'] = _sa_type[col_type]
             row['type_'] = row.pop('type')
+            if 'default' in row:
+                row['server_default'] = str(row.pop('default'))
             cols.append(sa.Column(**row))
         sa.Table(table, meta, *cols).create(engine)
         return
     # If the table's already in the DB, add new columns. We can't change column types
     with engine.connect() as conn:
         with conn.begin():
-            for row in schema:
+            for row in columns:
                 if row['name'] in db_table.columns:
                     continue
                 col_type = row.get('type', 'text')
                 constraints = []
-                for keyword in ('auto_increment', 'nullable', 'primary_key'):
-                    if row.get(keyword, None):
-                        constraints.append(keyword)
-                for keyword in ('default',):
-                    if row.get(keyword, None):
-                        constraints += [keyword, row[keyword]]
+                if 'nullable' in row:
+                    constraints.append('' if row['nullable'] else 'NOT NULL')
+                if 'default' in row:
+                    # repr() converts int, float properly,
+                    #   str into 'str' with single quotes (which is the MySQL standard)
+                    #   datetime and other types will fail
+                    constraints += ['DEFAULT', repr(row['default'])]
                 # This syntax works on DB2, MySQL, Oracle, PostgreSQL, SQLite
                 conn.execute('ALTER TABLE %s ADD COLUMN %s %s %s' % (
                     table, row['name'], col_type, ' '.join(constraints)))
-    # TODO: insert() and update() should auto-run alter()
-
-    # BUG: update() doesn't handle this right
-    # ?id=1&data=x&id=2&data=y
-    # {id: [1, 2], data: [x, y]}

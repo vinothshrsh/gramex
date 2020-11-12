@@ -772,41 +772,63 @@ class TestFilterColsDB(unittest.TestCase, FilterColsMixin):
         dbutils.sqlite_drop_db('test_filtercols.db')
 
 
-class TestAlter(unittest.TestCase):
+class TestSchema(unittest.TestCase):
     sales = gramex.cache.open(sales_file, 'xlsx')
     db = set()
 
-    def check_alter(self, url):
+    def check_schema(self, url, id=999, age=4.5):
         # Add a new column of types str, int, float.
-        # Also test default, auto_increment, nullable and primary_key
-        gramex.data.alter(url, 'sales', [
-            {'name': 'email'},
-            {'name': 'id', 'type': 'int', 'auto_increment': True, 'primary_key': True},
-            {'name': 'age', 'type': 'float', 'nullable': False},
+        # Also test default, nullable
+        gramex.data.schema(url, table='sales', columns=[
+            {'name': 'id', 'type': 'int'},
+            {'name': 'email', 'nullable': True, 'default': 'none'},
+            {'name': 'age', 'type': 'float', 'nullable': False, 'default': age},
+        ])
+        # New tables also support primary_key, autoincrement
+        gramex.data.schema(url, table='new', columns=[
+            {'name': 'id', 'type': 'int', 'primary_key': True, 'autoincrement': True},
+            {'name': 'email', 'nullable': True, 'default': 'none'},
+            {'name': 'age', 'type': 'float', 'nullable': False, 'default': age},
         ])
         engine = sa.create_engine(url)
         meta = sa.MetaData(bind=engine)
         meta.reflect()
-        sales = meta.tables['sales']
-        eq_(sales.columns.email.type.python_type, str)
-        # eq_(sales.columns.email.nullable, False)
-        eq_(sales.columns.id.type.python_type, int)
-        eq_(sales.columns.age.type.python_type, float)
+        # Test types
+        for table in (meta.tables['sales'], meta.tables['new']):
+            eq_(table.columns.id.type.python_type, int)
+            # eq_(table.columns.id.nullable, True)
+            eq_(table.columns.email.type.python_type, str)
+            # eq_(table.columns.email.nullable, True)
+            eq_(table.columns.age.type.python_type, float)
+            eq_(table.columns.age.nullable, False)
+        # sales: insert and test row for default and types
+        gramex.data.insert(url, table='sales', args={'id': [id]})
+        result = gramex.data.filter(url, table='sales', args={'id': [id]})
+        eq_(len(result), 1)
+        eq_(result['id'].iloc[0], id)
+        eq_(result['email'].iloc[0], 'none')
+        eq_(result['age'].iloc[0], age)
+        # new: test types
+        gramex.data.insert(url, table='new', args={'age': [3.0, 4.0]})
+        afe(gramex.data.filter(url, table='new'), pd.DataFrame([
+            {'id': 1, 'email': 'none', 'age': 3.0},
+            {'id': 2, 'email': 'none', 'age': 4.0},
+        ]))
 
     def test_mysql(self):
         url = dbutils.mysql_create_db(server.mysql, 'test_alter', sales=self.sales)
         self.db.add('mysql')
-        self.check_alter(url)
+        self.check_schema(url)
 
     def test_postgres(self):
         url = dbutils.postgres_create_db(server.postgres, 'test_alter', sales=self.sales)
         self.db.add('postgres')
-        self.check_alter(url)
+        self.check_schema(url)
 
     def test_sqlite(self):
         url = dbutils.sqlite_create_db('test_alter.db', sales=self.sales)
         self.db.add('sqlite')
-        self.check_alter(url)
+        self.check_schema(url)
 
     @classmethod
     def tearDownClass(cls):
@@ -816,3 +838,9 @@ class TestAlter(unittest.TestCase):
             dbutils.postgres_drop_db(server.postgres, 'test_alter')
         if 'sqlite' in cls.db:
             dbutils.sqlite_drop_db('test_alter.db')
+
+# TODO: insert() and update() should auto-run alter()
+
+# BUG: update() doesn't handle this right
+# ?id=1&data=x&id=2&data=y
+# {id: [1, 2], data: [x, y]}
