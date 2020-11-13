@@ -1235,13 +1235,6 @@ def filtercols(url, args={}, meta={}, engine=None, table=None, ext=None,
     return result
 
 
-# This maps all SQLAlchemy types into their lowercase names
-#   _sa_type['text'] -> sa.Text
-#   _sa_type['bigint'] -> sa.BIGINT
-# Loop through all SQL Types, use all public variables
-_sa_type = {key.lower(): val for key, val in vars(sa.types).items() if not key.startswith('_')}
-
-
 def schema(url, table, columns):
     '''
     Create or alter a table with schema specified in columns::
@@ -1282,8 +1275,8 @@ def schema(url, table, columns):
         for row in columns:
             col_type = row.get('type', 'text')
             if isinstance(col_type, str):
-                # TODO: handle VARCHAR(4)
-                row['type'] = _sa_type[col_type]
+                # Use eval() to handle direct types like INTEGER *and* expressions like VARCHAR(3)
+                row['type'] = eval(col_type.upper(), vars(sa.types))    # nosec
             row['type_'] = row.pop('type')
             if 'default' in row:
                 row['server_default'] = str(row.pop('default'))
