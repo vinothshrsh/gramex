@@ -781,13 +781,13 @@ class TestSchema(unittest.TestCase):
         # Also test default, nullable
         gramex.data.schema(url, table='sales', columns=[
             {'name': 'id', 'type': 'int'},
-            {'name': 'email', 'nullable': True, 'default': 'none'},
+            {'name': 'email', 'type': 'varchar', 'nullable': True, 'default': 'none'},
             {'name': 'age', 'type': 'float', 'nullable': False, 'default': age},
         ])
         # New tables also support primary_key, autoincrement
         gramex.data.schema(url, table='new', columns=[
             {'name': 'id', 'type': 'int', 'primary_key': True, 'autoincrement': True},
-            {'name': 'email', 'nullable': True, 'default': 'none'},
+            {'name': 'email', 'type': 'varchar', 'nullable': True, 'default': 'none'},
             {'name': 'age', 'type': 'float', 'nullable': False, 'default': age},
         ])
         engine = sa.create_engine(url)

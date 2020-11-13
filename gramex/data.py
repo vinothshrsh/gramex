@@ -1282,6 +1282,7 @@ def schema(url, table, columns):
         for row in columns:
             col_type = row.get('type', 'text')
             if isinstance(col_type, str):
+                # TODO: handle VARCHAR(4)
                 row['type'] = _sa_type[col_type]
             row['type_'] = row.pop('type')
             if 'default' in row:
